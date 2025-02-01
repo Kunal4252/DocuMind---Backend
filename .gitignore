@@ -1,6 +1,9 @@
 # Environment variables
 .env
 
-
+__pycache__
 # IDE files
 venv
+
+#firebase_private_key
+app/firebase_private_key.json
