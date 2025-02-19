@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from app.utils.firebase import initialize_firebase
 from app.routes import profile
-
+from app.db.init_db import init_db
 app = FastAPI()
 
-# Initialize Firebase Admin SDK
-initialize_firebase()
+@app.on_event("startup")
+def startup():
+    initialize_firebase()  
+    init_db()  
+    
 
-# Include the profile route
 app.include_router(profile.router, prefix="/api", tags=["profile"])
