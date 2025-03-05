@@ -6,4 +6,4 @@ __pycache__
 venv
 
 #firebase_private_key
-app/firebase_private_key.json
+app/config/firebase_private_key.json
