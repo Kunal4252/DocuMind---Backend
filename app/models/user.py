@@ -8,10 +8,10 @@ class User(Base):
     id = Column(String, primary_key=True) 
     email = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    profile_image = Column(String, nullable=True)  
+    profile_image = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    bio = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)  
+    created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-
-    
