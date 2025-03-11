@@ -8,3 +8,9 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     print("created tables successfully")
     
+def close_db_connection():
+    print("closing database connections")
+    if engine:
+        engine.dispose()
+    print("database connections closed")
+    
