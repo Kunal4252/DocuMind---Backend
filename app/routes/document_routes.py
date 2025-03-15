@@ -115,17 +115,11 @@ async def chat_with_document(
         # Get chat history for context
         chat_history = rag_service.get_chat_history(db, user_id, document_id)
         
-        # Try vector search first
-        chunks = rag_service.doc_service.retrieve_relevant_chunks(query=request.message, document_id=document_id)
-        
-        # If no chunks found, fall back to database retrieval
-        if not chunks:
-            chunks = rag_service.doc_service.get_chunks_from_database(db, document_id)
-            
-        # Get response from RAG
+        # Query document using the RAG service - pass db session for fallback
         result = rag_service.query_document(
             query=request.message,
             document_id=document_id,
+            db=db,  # Pass the database session for fallback
             chat_history=chat_history
         )
         
@@ -230,4 +224,4 @@ async def list_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
-        ) 
+        )

@@ -18,7 +18,7 @@ class DocumentChunkMetadata(BaseModel):
 
 class RelevantChunk(BaseModel):
     content: str
-    metadata: DocumentChunkMetadata
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     relevance_score: float
 
 class DocumentUploadResponse(BaseModel):

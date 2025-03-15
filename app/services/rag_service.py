@@ -40,6 +40,10 @@ class RAGService:
                 do_sample=True
             )
             print("Successfully initialized HuggingFaceEndpoint")
+            
+            # Verify Qdrant collection
+            self.doc_service.verify_collection()
+            
         except Exception as e:
             print(f"Error initializing HuggingFaceEndpoint: {str(e)}")
             # Fallback to a simple model or raise an exception
@@ -64,11 +68,16 @@ class RAGService:
             input_variables=["context", "chat_history", "question"]
         )
     
-    def query_document(self, query: str, document_id: str, chat_history=None, top_k: int = 5):
+    def query_document(self, query: str, document_id: str, db: Session = None, chat_history=None, top_k: int = 5):
         """Query a specific document using direct vector retrieval"""
         try:
-            # 1. Retrieve relevant chunks directly using the user's query
+            # 1. First, attempt to retrieve relevant chunks via vector search
             chunks = self.doc_service.retrieve_relevant_chunks(query, document_id, top_k)
+            
+            # If no chunks found via vector search and db is provided, fall back to database retrieval
+            if not chunks and db is not None:
+                print("Vector search returned no results. Falling back to database retrieval.")
+                chunks = self.doc_service.get_chunks_from_database(db, document_id, top_k)
             
             # Handle empty results
             if not chunks:
@@ -81,19 +90,28 @@ class RAGService:
             # 2. Format the context from retrieved chunks
             context = "\n\n".join([chunk["content"] for chunk in chunks])
             
-            # 3. Create a simple prompt
+            # 3. Format chat history if provided
+            chat_history_text = ""
+            if chat_history and len(chat_history) > 0:
+                history_items = []
+                for user_msg, bot_msg in chat_history:
+                    history_items.append(f"User: {user_msg}\nAssistant: {bot_msg}")
+                chat_history_text = "\n\n".join(history_items)
+            
+            # 4. Create a prompt with context and chat history
             prompt = f"""
             Answer the following question based only on the provided context:
             
             Context:
             {context}
             
+            {f"Previous conversation:\n{chat_history_text}\n\n" if chat_history_text else ""}
             Question: {query}
             
             Answer:
             """
             
-            # 4. Send directly to LLM without using a chain
+            # 5. Send directly to LLM
             response = self.llm.invoke(prompt)
             
             return {
@@ -151,4 +169,4 @@ class RAGService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to retrieve chat history: {str(e)}"
-            ) 
+            )
