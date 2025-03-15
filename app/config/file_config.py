@@ -1,8 +1,7 @@
-
 # Allowed MIME types for documents
 ALLOWED_DOCUMENT_MIME_TYPES = {
     "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
 }
 
 # Allowed MIME types for images (profile pictures)

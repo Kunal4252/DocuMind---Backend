@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends, Body, HTTPException, status
+from fastapi import APIRouter, Depends, Body, HTTPException, status, File, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.dependencies import get_current_user
 from app.services.user_service import UserService
 from app.schemas.user import EmailSignInData, UserProfileResponse, UserProfileUpdate
+from app.services.file_validation_service import FileValidationService
+from app.services.cloudinary_upload_service import CloudinaryUploadService
+from app.models.user import User
 
 user_router = APIRouter(prefix="/users", tags=["users"])
 user_service = UserService()
@@ -92,4 +95,47 @@ async def update_profile(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
+        )
+
+@user_router.post("/profile/upload-image", response_model=dict)
+async def upload_profile_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload a profile image for the current user"""
+    try:
+        user_id = current_user["uid"]
+        
+        # Validate image file
+        FileValidationService.validate_file(file, 'image')
+        
+        # Upload file to Cloudinary
+        cloudinary_service = CloudinaryUploadService()
+        file_url = cloudinary_service.upload_file(
+            file, 
+            'image', 
+            user_id
+        )
+        
+        # Update the user's profile_image field in the database
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.profile_image = file_url
+            db.commit()
+        
+        return {
+            "message": "Profile image uploaded successfully",
+            "file_url": file_url
+        }
+    
+    except HTTPException as e:
+        # Re-raise any HTTP exceptions from validation or upload
+        raise e
+    except Exception as e:
+        # Handle any unexpected errors
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}"
         )

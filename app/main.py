@@ -1,9 +1,12 @@
-from fastapi import FastAPI
-from app.utils.firebase import initialize_firebase
-from app.routes.user_routes import user_router
-from app.db.init_db import init_db, close_db_connection
-from app.routes.file_upload_router import file_router
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+import time
+
+from app.utils.firebase import initialize_firebase
+from app.db.init_db import init_db, close_db_connection
+from app.routes.user_routes import user_router
+from app.routes.document_routes import document_router
+
 app = FastAPI()
 
 app.add_middleware(
@@ -13,6 +16,16 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
 )
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    print(f"Request to {request.url.path} took {process_time:.4f} seconds")
+    return response
+
 @app.on_event("startup")
 def startup():
     initialize_firebase()  
@@ -23,4 +36,4 @@ def shutdown():
     close_db_connection()
 
 app.include_router(user_router)
-app.include_router(file_router)
+app.include_router(document_router)
