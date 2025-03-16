@@ -169,11 +169,8 @@ async def get_document_chat_history(
                 detail="Document not found or doesn't belong to you"
             )
         
-        # Get raw chat history
-        history_entries = db.query(ChatHistory).filter(
-            ChatHistory.user_id == user_id,
-            ChatHistory.document_id == document_id
-        ).order_by(ChatHistory.timestamp).all()
+        # Get full chat history for UI display
+        history_entries = rag_service.get_full_chat_history(db, user_id, document_id)
         
         # Format for API response
         chat_history = []

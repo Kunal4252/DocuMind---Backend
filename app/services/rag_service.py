@@ -11,7 +11,6 @@ load_dotenv()
 from langchain_core.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
 from langchain_huggingface import HuggingFaceEndpoint
-from langchain.chains import ConversationalRetrievalChain
 
 # App imports
 from app.services.langchain_document_service import LangChainDocumentService
@@ -90,13 +89,17 @@ class RAGService:
             # 2. Format the context from retrieved chunks
             context = "\n\n".join([chunk["content"] for chunk in chunks])
             
-            # 3. Format chat history if provided
+            # 3. Format chat history if provided (limited to last 5 interactions)
             chat_history_text = ""
             if chat_history and len(chat_history) > 0:
+                # Only include up to 5 most recent interactions
+                recent_history = chat_history[-5:] if len(chat_history) > 5 else chat_history
+                
                 history_items = []
-                for user_msg, bot_msg in chat_history:
+                for user_msg, bot_msg in recent_history:
                     history_items.append(f"User: {user_msg}\nAssistant: {bot_msg}")
                 chat_history_text = "\n\n".join(history_items)
+                print(f"Including {len(recent_history)} recent interactions in prompt context")
             
             # 4. Create a prompt with context and chat history
             prompt = f"""
@@ -105,7 +108,7 @@ class RAGService:
             Context:
             {context}
             
-            {f"Previous conversation:\n{chat_history_text}\n\n" if chat_history_text else ""}
+            {f"Previous conversation (most recent only):\n{chat_history_text}\n\n" if chat_history_text else ""}
             Question: {query}
             
             Answer:
@@ -151,22 +154,44 @@ class RAGService:
             )
             
     def get_chat_history(self, db: Session, user_id: str, document_id: str) -> List[tuple]:
-        """Get chat history for a specific document and user"""
+        """Get limited chat history (last 5 entries) for RAG context"""
         try:
+            # Get only the last 5 interactions to avoid context length issues
             history = db.query(ChatHistory).filter(
                 ChatHistory.user_id == user_id,
                 ChatHistory.document_id == document_id
-            ).order_by(ChatHistory.timestamp).all()
+            ).order_by(ChatHistory.timestamp.desc()).limit(5).all()
+            
+            # Reverse the list to get chronological order (oldest first)
+            history.reverse()
             
             # Format for LangChain's memory format
             formatted_history = [
                 (entry.user_message, entry.bot_response) for entry in history
             ]
             
+            print(f"Using last {len(formatted_history)} chat history entries for context")
             return formatted_history
             
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to retrieve chat history: {str(e)}"
+            )
+            
+    def get_full_chat_history(self, db: Session, user_id: str, document_id: str) -> List[ChatHistory]:
+        """Get complete chat history for UI display"""
+        try:
+            # Get all chat history for the document
+            history = db.query(ChatHistory).filter(
+                ChatHistory.user_id == user_id,
+                ChatHistory.document_id == document_id
+            ).order_by(ChatHistory.timestamp).all()
+            
+            return history
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve full chat history: {str(e)}"
             )
