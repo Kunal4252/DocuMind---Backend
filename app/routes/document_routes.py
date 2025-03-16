@@ -9,8 +9,9 @@ from app.db.session import get_db
 from app.dependencies import get_current_user
 from app.models.document import Document
 from app.models.chat_history import ChatHistory
+from app.models.document_chunk import DocumentChunk
 from app.services.cloudinary_upload_service import CloudinaryUploadService
-from app.services.langchain_document_service import LangChainDocumentService
+from app.services.langchain_document_service import LangChainDocumentService, COLLECTION_NAME
 from app.services.rag_service import RAGService
 from app.schemas.document import (
     DocumentChatRequest,
@@ -224,4 +225,80 @@ async def list_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred: {str(e)}"
+        )
+
+@document_router.delete("/{document_id}", response_model=dict)
+async def delete_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a document and all its associated data"""
+    try:
+        # Get user ID
+        user_id = current_user["uid"]
+        
+        # Check if document exists and belongs to the user
+        document = db.query(Document).filter(
+            Document.id == document_id,
+            Document.user_id == user_id
+        ).first()
+        
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found or doesn't belong to you"
+            )
+        
+        # 1. Get all document chunks to find vector_db_ids
+        chunks = db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
+        ).all()
+        
+        vector_ids = [chunk.vector_db_id for chunk in chunks]
+        
+        # 2. Delete vectors from Qdrant if available
+        if vector_ids and len(vector_ids) > 0:
+            try:
+                # Get Qdrant client
+                qdrant_client = doc_service.client
+                if qdrant_client:
+                    # Delete vectors from Qdrant collection
+                    qdrant_client.delete(
+                        collection_name=COLLECTION_NAME,
+                        points_selector=vector_ids
+                    )
+                    print(f"Deleted {len(vector_ids)} vectors from Qdrant")
+            except Exception as e:
+                print(f"Error deleting vectors from Qdrant: {str(e)}")
+                # Continue with deletion even if Qdrant deletion fails
+        
+        # 3. Delete chat history
+        db.query(ChatHistory).filter(
+            ChatHistory.document_id == document_id
+        ).delete(synchronize_session=False)
+        
+        # 4. Delete document chunks
+        db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
+        ).delete(synchronize_session=False)
+        
+        # 5. Delete the document
+        db.delete(document)
+        
+        # Commit all changes
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Document '{document.title}' and all associated data deleted successfully"
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        db.rollback()  # Roll back changes in case of error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete document: {str(e)}"
         )
