@@ -1,10 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Body, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Body
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any, Optional
-import uuid
+from typing import List, Dict, Any
 
-# App imports
 from app.db.session import get_db
 from app.dependencies import get_current_user
 from app.models.document import Document
@@ -23,7 +20,6 @@ from app.services.file_validation_service import FileValidationService
 
 document_router = APIRouter(prefix="/documents", tags=["documents"])
 
-# Initialize services
 cloudinary_service = CloudinaryUploadService()
 doc_service = LangChainDocumentService()
 rag_service = RAGService()
@@ -35,22 +31,17 @@ async def upload_document(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload document, store in Cloudinary, and process with LangChain"""
     try:
-        # Get user ID
         user_id = current_user["uid"]
         
-        # 1. Use FileValidationService for validation
         FileValidationService.validate_file(file, 'document')
         
-        # 2. Upload file to Cloudinary
         file_url = cloudinary_service.upload_file(
             file,
             'document',
             user_id
         )
         
-        # 3. Create document record in PostgreSQL
         document = Document(
             user_id=user_id,
             title=title,
@@ -62,10 +53,8 @@ async def upload_document(
         db.refresh(document)
         document_id = document.id
         
-        # Reset file pointer for processing
         await file.seek(0)
         
-        # 4. Process document with LangChain
         processing_result = await doc_service.process_document(
             db=db,
             file=file,
@@ -97,11 +86,9 @@ async def chat_with_document(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Chat with a specific document"""
     try:
         user_id = current_user["uid"]
         
-        # Check if document exists and belongs to the user
         document = db.query(Document).filter(
             Document.id == document_id,
             Document.user_id == user_id
@@ -113,18 +100,15 @@ async def chat_with_document(
                 detail="Document not found or doesn't belong to you"
             )
         
-        # Get chat history for context
         chat_history = rag_service.get_chat_history(db, user_id, document_id)
         
-        # Query document using the RAG service - pass db session for fallback
         result = rag_service.query_document(
             query=request.message,
             document_id=document_id,
-            db=db,  # Pass the database session for fallback
+            db=db,
             chat_history=chat_history
         )
         
-        # Save to chat history
         rag_service.save_chat_history(
             db=db,
             user_id=user_id,
@@ -153,11 +137,9 @@ async def get_document_chat_history(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get chat history for a specific document"""
     try:
         user_id = current_user["uid"]
         
-        # Check if document exists and belongs to the user
         document = db.query(Document).filter(
             Document.id == document_id,
             Document.user_id == user_id
@@ -169,10 +151,8 @@ async def get_document_chat_history(
                 detail="Document not found or doesn't belong to you"
             )
         
-        # Get full chat history for UI display
         history_entries = rag_service.get_full_chat_history(db, user_id, document_id)
         
-        # Format for API response
         chat_history = []
         for entry in history_entries:
             chat_history.append({
@@ -201,7 +181,6 @@ async def list_documents(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """List all documents for the current user"""
     try:
         user_id = current_user["uid"]
         documents = db.query(Document).filter(Document.user_id == user_id).all()
@@ -230,12 +209,9 @@ async def delete_document(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Delete a document and all its associated data"""
     try:
-        # Get user ID
         user_id = current_user["uid"]
         
-        # Check if document exists and belongs to the user
         document = db.query(Document).filter(
             Document.id == document_id,
             Document.user_id == user_id
@@ -247,14 +223,14 @@ async def delete_document(
                 detail="Document not found or doesn't belong to you"
             )
         
-        # 1. Get all document chunks to find vector_db_ids
+        # Get all document chunks to find vector_db_ids
         chunks = db.query(DocumentChunk).filter(
             DocumentChunk.document_id == document_id
         ).all()
         
         vector_ids = [chunk.vector_db_id for chunk in chunks]
         
-        # 2. Delete vectors from Qdrant if available
+        # Delete vectors from Qdrant if available
         if vector_ids and len(vector_ids) > 0:
             try:
                 # Get Qdrant client
@@ -265,22 +241,21 @@ async def delete_document(
                         collection_name=COLLECTION_NAME,
                         points_selector=vector_ids
                     )
-                    print(f"Deleted {len(vector_ids)} vectors from Qdrant")
-            except Exception as e:
-                print(f"Error deleting vectors from Qdrant: {str(e)}")
+            except Exception:
                 # Continue with deletion even if Qdrant deletion fails
+                pass
         
-        # 3. Delete chat history
+        # Delete chat history
         db.query(ChatHistory).filter(
             ChatHistory.document_id == document_id
         ).delete(synchronize_session=False)
         
-        # 4. Delete document chunks
+        # Delete document chunks
         db.query(DocumentChunk).filter(
             DocumentChunk.document_id == document_id
         ).delete(synchronize_session=False)
         
-        # 5. Delete the document
+        # Delete the document
         db.delete(document)
         
         # Commit all changes

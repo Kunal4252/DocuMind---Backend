@@ -1,12 +1,12 @@
 import os
 import uuid
 import tempfile
+import time
 from typing import List, Dict, Any
 from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime
 from dotenv import load_dotenv
-import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -64,13 +64,10 @@ class LangChainDocumentService:
                 self.client = QdrantConnectionManager.get_client()
                 # Test connection
                 collections = self.client.get_collections()
-                print(f"Successfully connected to Qdrant")
                 break
             except Exception as e:
                 retry_count += 1
-                print(f"Error connecting to Qdrant (attempt {retry_count}/{max_retries}): {str(e)}")
                 if retry_count >= max_retries:
-                    print("Could not connect to Qdrant after multiple attempts.")
                     self.client = None
                 time.sleep(1)  # Wait before retrying
         
@@ -87,7 +84,6 @@ class LangChainDocumentService:
     def _initialize_collection(self):
         """Initialize the Qdrant collection with proper schema"""
         if not self.client:
-            print("Qdrant client not initialized, skipping collection setup")
             return
             
         try:
@@ -95,7 +91,6 @@ class LangChainDocumentService:
             collection_names = [collection.name for collection in collections]
             
             if COLLECTION_NAME not in collection_names:
-                print(f"Creating collection: {COLLECTION_NAME}")
                 self.client.create_collection(
                     collection_name=COLLECTION_NAME,
                     vectors_config=models.VectorParams(
@@ -105,18 +100,15 @@ class LangChainDocumentService:
                     # Define payload schema to ensure consistency
                     on_disk_payload=True  # Store payload on disk for large collections
                 )
-                print(f"Collection {COLLECTION_NAME} created successfully")
-        except Exception as e:
-            print(f"Error initializing collection: {str(e)}")
+        except Exception:
+            pass
     
     def verify_collection(self):
         """Verify the collection exists and inspect sample data"""
         try:
             # Check if collection exists
             collection_info = self.client.get_collection(COLLECTION_NAME)
-            print(f"Collection {COLLECTION_NAME} exists with {collection_info.points_count} points")
             
-            # Get a sample point to check schema if any points exist
             if collection_info.points_count > 0:
                 points = self.client.scroll(
                     collection_name=COLLECTION_NAME,
@@ -124,12 +116,10 @@ class LangChainDocumentService:
                 )[0]
                 
                 if points:
-                    print(f"Sample point payload: {points[0].payload}")
                     return True
             
             return collection_info.points_count > 0
-        except Exception as e:
-            print(f"Error verifying collection: {str(e)}")
+        except Exception:
             return False
     
     async def process_document(self, db: Session, file: UploadFile, document_id: str, user_id: str) -> Dict[str, Any]:
@@ -168,9 +158,6 @@ class LangChainDocumentService:
             texts = []
             metadatas = []
             
-            # Debug info
-            print(f"Processing {len(chunks)} chunks for document {document_id}")
-            
             # Format with metadata
             for i, chunk in enumerate(chunks):
                 # Create a unique UUID for vector store
@@ -205,16 +192,12 @@ class LangChainDocumentService:
                 db_chunks.append(db_chunk)
             
             if chunks:
-                print(f"Sample chunk metadata: {metadatas[0]}")
-                
                 # Add to vector store - use the properly constructed texts and metadatas
                 self.vector_store.add_texts(
                     texts=texts,
                     metadatas=metadatas,
                     ids=vector_ids
                 )
-                
-                print(f"Added {len(texts)} chunks to vector store")
             
             # Commit database changes
             db.commit()
@@ -246,15 +229,12 @@ class LangChainDocumentService:
         try:
             # Verify we have a connection to Qdrant
             if not self.client:
-                print("Qdrant client not available, falling back to database retrieval")
                 return []
             
             # First, verify collection has documents
             collection_info = self.client.get_collection(COLLECTION_NAME)
-            print(f"Total vectors in collection: {collection_info.points_count}")
             
             if collection_info.points_count == 0:
-                print("Collection is empty, no documents to search")
                 return []
             
             # Create filter for specific document
@@ -277,7 +257,6 @@ class LangChainDocumentService:
             )
             
             if not results:
-                print(f"No results found for document_id={document_id}")
                 return []
             
             processed_results = []
@@ -288,11 +267,9 @@ class LangChainDocumentService:
                     "relevance_score": float(score)  # Convert numpy float to Python float if needed
                 })
             
-            print(f"Found {len(processed_results)} relevant chunks")
             return processed_results
             
-        except Exception as e:
-            print(f"Error in vector search: {str(e)}")
+        except Exception:
             return []
     
     def get_document_retriever(self, document_id: str, k: int = 5):
@@ -344,10 +321,8 @@ class LangChainDocumentService:
                     "relevance_score": 1.0
                 })
             
-            print(f"Retrieved {len(results)} chunks directly from database")
             return results
-        except Exception as e:
-            print(f"Error retrieving from database: {str(e)}")
+        except Exception:
             return []
     
     def query_document(self, db: Session, document_id: str, query: str, k: int = 5):
@@ -357,7 +332,6 @@ class LangChainDocumentService:
         
         # If no results, fall back to database retrieval
         if not results:
-            print(f"No vector results found, retrieving from database")
             results = self.get_chunks_from_database(db, document_id, k)
         
         return {

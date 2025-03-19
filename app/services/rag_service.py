@@ -20,9 +20,6 @@ from app.models.chat_history import ChatHistory
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 MISTRAL_MODEL_NAME = os.getenv("MISTRAL_MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.2")
 
-# Debug: Print partial API key to verify it's loaded
-print(f"HF API Key: {HF_API_KEY[:4]}...{HF_API_KEY[-4:] if HF_API_KEY and len(HF_API_KEY) > 8 else 'None or too short'}")
-
 class RAGService:
     def __init__(self):
         # Init document service with Qdrant
@@ -38,14 +35,11 @@ class RAGService:
                 max_new_tokens=512,
                 do_sample=True
             )
-            print("Successfully initialized HuggingFaceEndpoint")
             
             # Verify Qdrant collection
             self.doc_service.verify_collection()
             
         except Exception as e:
-            print(f"Error initializing HuggingFaceEndpoint: {str(e)}")
-            # Fallback to a simple model or raise an exception
             raise
         
         # Customize the single-document RAG prompt
@@ -75,7 +69,6 @@ class RAGService:
             
             # If no chunks found via vector search and db is provided, fall back to database retrieval
             if not chunks and db is not None:
-                print("Vector search returned no results. Falling back to database retrieval.")
                 chunks = self.doc_service.get_chunks_from_database(db, document_id, top_k)
             
             # Handle empty results
@@ -99,7 +92,6 @@ class RAGService:
                 for user_msg, bot_msg in recent_history:
                     history_items.append(f"User: {user_msg}\nAssistant: {bot_msg}")
                 chat_history_text = "\n\n".join(history_items)
-                print(f"Including {len(recent_history)} recent interactions in prompt context")
             
             # 4. Create a prompt with context and chat history
             prompt = f"""
@@ -123,7 +115,6 @@ class RAGService:
                 "document_id": document_id
             }
         except Exception as e:
-            print(f"Error in query_document: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to query document: {str(e)}"
@@ -170,7 +161,6 @@ class RAGService:
                 (entry.user_message, entry.bot_response) for entry in history
             ]
             
-            print(f"Using last {len(formatted_history)} chat history entries for context")
             return formatted_history
             
         except Exception as e:
