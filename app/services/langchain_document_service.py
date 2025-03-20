@@ -15,7 +15,8 @@ load_dotenv()
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Qdrant
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+
 
 # Qdrant specific imports
 from qdrant_client import QdrantClient
@@ -25,6 +26,11 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 # App imports
 from app.models.document_chunk import DocumentChunk
 from app.models.document import Document
+
+import logging
+# Initialize logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Configuration
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -51,9 +57,8 @@ class QdrantConnectionManager:
 class LangChainDocumentService:
     def __init__(self):
         # Initialize the HuggingFace Inference API for embeddings
-        self.embeddings = HuggingFaceInferenceAPIEmbeddings(
-            api_key=HF_API_KEY,
-            model_name=EMBEDDING_MODEL_NAME
+        self.embeddings = SentenceTransformerEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
         
         # Initialize Qdrant client using the connection manager
@@ -62,17 +67,15 @@ class LangChainDocumentService:
         while retry_count < max_retries:
             try:
                 self.client = QdrantConnectionManager.get_client()
-                # Test connection
                 collections = self.client.get_collections()
+                logger.info("Connected to Qdrant successfully")
                 break
             except Exception as e:
                 retry_count += 1
+                logger.error(f"Failed to connect to Qdrant (attempt {retry_count}): {str(e)}")
                 if retry_count >= max_retries:
                     self.client = None
-                time.sleep(1)  # Wait before retrying
-        
-        # Initialize collection if needed
-        self._initialize_collection()
+                time.sleep(1)
         
         # Initialize the vector store with Qdrant
         self.vector_store = Qdrant(
@@ -80,6 +83,9 @@ class LangChainDocumentService:
             collection_name=COLLECTION_NAME,
             embeddings=self.embeddings,
         )
+
+        # Initialize the collection schema
+        self._initialize_collection()
     
     def _initialize_collection(self):
         """Initialize the Qdrant collection with proper schema"""
@@ -126,13 +132,18 @@ class LangChainDocumentService:
         """Process document (PDF or DOCX) with LangChain and store in Qdrant"""
         temp_file_path = None
         try:
+            logger.info(f"Starting document processing: document_id={document_id}, user_id={user_id}")
+
             # Create a temporary file to store the uploaded document
             file_extension = os.path.splitext(file.filename)[1].lower()
+            logger.info(f"File extension detected: {file_extension}")
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
                 contents = await file.read()
                 temp_file.write(contents)
                 temp_file_path = temp_file.name
-            
+                logger.info(f"Temporary file created at {temp_file_path}")
+
             # Load document using appropriate LangChain loader based on file type
             if file_extension == '.pdf':
                 loader = PyPDFLoader(temp_file_path)
@@ -140,10 +151,12 @@ class LangChainDocumentService:
                 from langchain_community.document_loaders import UnstructuredWordDocumentLoader
                 loader = UnstructuredWordDocumentLoader(temp_file_path)
             else:
+                logger.error(f"Unsupported file type: {file_extension}")
                 raise ValueError(f"Unsupported file type: {file_extension}")
-            
+
             documents = loader.load()
-            
+            logger.info(f"{len(documents)} documents loaded successfully")
+
             # Split documents into chunks
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
@@ -151,37 +164,30 @@ class LangChainDocumentService:
                 length_function=len,
             )
             chunks = text_splitter.split_documents(documents)
-            
+            logger.info(f"{len(chunks)} chunks created")
+
             # Process and store chunks
             db_chunks = []
             vector_ids = []
             texts = []
             metadatas = []
             
-            # Format with metadata
             for i, chunk in enumerate(chunks):
-                # Create a unique UUID for vector store
                 vector_db_id = str(uuid.uuid4())
                 vector_ids.append(vector_db_id)
-                
-                # Store the original text content
                 texts.append(chunk.page_content)
-                
-                # Create consistent metadata
+
                 metadata = {
                     "document_id": document_id,
                     "user_id": user_id,
                     "chunk_index": i,
                     "vector_db_id": vector_db_id,
                     "file_type": file_extension[1:],
-                    "page_content": chunk.page_content  # Store content in metadata for direct access
+                    "page_content": chunk.page_content
                 }
-                
-                # Update the chunk's metadata
                 chunk.metadata.update(metadata)
                 metadatas.append(metadata)
-                
-                # Create database record
+
                 db_chunk = DocumentChunk(
                     document_id=document_id,
                     chunk_index=i,
@@ -190,22 +196,30 @@ class LangChainDocumentService:
                 )
                 db.add(db_chunk)
                 db_chunks.append(db_chunk)
-            
+                
+                logger.debug(f"Chunk {i} processed and stored with vector_db_id={vector_db_id}")
+
             if chunks:
-                # Add to vector store - use the properly constructed texts and metadatas
+                # Generate embeddings locally (without API call)
+                embeddings = self.embeddings.embed_documents(texts)
+
+                # Add to vector store
                 self.vector_store.add_texts(
                     texts=texts,
                     metadatas=metadatas,
                     ids=vector_ids
                 )
-            
+                logger.info(f"{len(chunks)} chunks added to vector store")
+
             # Commit database changes
             db.commit()
-            
+            logger.info(f"Database committed with {len(db_chunks)} chunks")
+
             # Clean up temporary file
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
-            
+                logger.info(f"Temporary file {temp_file_path} deleted")
+
             return {
                 "document_id": document_id,
                 "chunks_processed": len(chunks),
@@ -214,11 +228,12 @@ class LangChainDocumentService:
             }
             
         except Exception as e:
-            # Clean up in case of error
+            logger.error(f"Error processing document {document_id}: {str(e)}", exc_info=True)
             db.rollback()
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
-                
+                logger.info(f"Temporary file {temp_file_path} deleted due to failure")
+
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to process document: {str(e)}"
